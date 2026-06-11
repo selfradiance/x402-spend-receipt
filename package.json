@@ -4,9 +4,22 @@
   "description": "Local policy evaluation and signed receipt ledger for x402 payment intents.",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/selfradiance/x402-spend-receipt.git"
+  },
+  "keywords": [
+    "x402",
+    "agentic-commerce",
+    "ai-agents",
+    "receipts",
+    "ed25519"
+  ],
   "bin": {
     "x402-spend-receipt": "./dist/cli.js"
   },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "files": [
     "dist",
     "README.md",
@@ -24,6 +37,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "lint": "eslint . --max-warnings=0",
+    "prepublishOnly": "npm test && npm run lint && npm run build",
     "test": "vitest run"
   },
   "dependencies": {
