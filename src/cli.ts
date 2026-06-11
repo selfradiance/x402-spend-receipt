@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 import { Command, CommanderError } from "commander";
 
@@ -280,7 +280,7 @@ class CliCommandError extends Error {
   }
 }
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] !== undefined && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1])) {
   runCli(process.argv.slice(2)).then((exitCode) => {
     process.exitCode = exitCode;
   });

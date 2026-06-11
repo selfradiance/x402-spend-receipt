@@ -1,6 +1,6 @@
 {
   "name": "x402-spend-receipt",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local policy evaluation and signed receipt ledger for x402 payment intents.",
   "type": "module",
   "license": "MIT",
