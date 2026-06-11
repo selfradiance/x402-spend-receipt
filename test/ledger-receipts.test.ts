@@ -209,6 +209,7 @@ describe("signing and ledger receipts", () => {
     const keyPair = generateEd25519KeyPair();
     const failingLedger: ReceiptLedgerWriter = {
       getLastReceiptHash: () => null,
+      getReceiptRowById: () => null,
       listAllowedReceipts: () => [],
       listReceiptRows: () => [],
       appendReceipt: () => {

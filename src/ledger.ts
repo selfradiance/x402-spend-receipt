@@ -11,12 +11,14 @@ export interface ReceiptLedgerMetadata {
 
 export interface StoredReceiptRow {
   sequence: number;
+  receiptId: string;
   receiptJson: string;
   receiptHash: string;
 }
 
 export interface ReceiptLedgerReader extends ReceiptHistoryReader {
   getLastReceiptHash(): string | null;
+  getReceiptRowById(receiptId: string): StoredReceiptRow | null;
   listReceiptRows(): readonly StoredReceiptRow[];
 }
 
@@ -36,6 +38,7 @@ interface AllowedHistoryRow {
 
 interface StoredReceiptDbRow {
   sequence: number;
+  receipt_id: string;
   receipt_json: string;
   receipt_hash: string;
 }
@@ -96,6 +99,23 @@ export class SqliteReceiptLedger implements ReceiptLedgerWriter {
     append();
   }
 
+  getReceiptRowById(receiptId: string): StoredReceiptRow | null {
+    const row = this.db
+      .prepare("SELECT sequence, receipt_id, receipt_json, receipt_hash FROM receipts WHERE receipt_id = ?")
+      .get(receiptId) as StoredReceiptDbRow | undefined;
+
+    if (row === undefined) {
+      return null;
+    }
+
+    return {
+      sequence: row.sequence,
+      receiptId: row.receipt_id,
+      receiptJson: row.receipt_json,
+      receiptHash: row.receipt_hash
+    };
+  }
+
   listAllowedReceipts(): readonly AllowedReceiptHistoryEntry[] {
     const rows = this.db
       .prepare(
@@ -117,11 +137,12 @@ export class SqliteReceiptLedger implements ReceiptLedgerWriter {
 
   listReceiptRows(): readonly StoredReceiptRow[] {
     const rows = this.db
-      .prepare("SELECT sequence, receipt_json, receipt_hash FROM receipts ORDER BY sequence ASC")
+      .prepare("SELECT sequence, receipt_id, receipt_json, receipt_hash FROM receipts ORDER BY sequence ASC")
       .all() as StoredReceiptDbRow[];
 
     return rows.map((row) => ({
       sequence: row.sequence,
+      receiptId: row.receipt_id,
       receiptJson: row.receipt_json,
       receiptHash: row.receipt_hash
     }));
