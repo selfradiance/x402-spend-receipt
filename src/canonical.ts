@@ -3,6 +3,41 @@ import { createHash } from "node:crypto";
 type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
+export function assertJsonValue(value: unknown): JsonValue {
+  if (value === null) {
+    return null;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => assertJsonValue(item));
+  }
+
+  switch (typeof value) {
+    case "string":
+    case "boolean":
+      return value;
+    case "number":
+      if (!Number.isFinite(value)) {
+        throw new TypeError("JSON value does not support non-finite numbers");
+      }
+      return value;
+    case "object": {
+      const prototype = Object.getPrototypeOf(value);
+      if (prototype !== Object.prototype && prototype !== null) {
+        throw new TypeError("JSON value only supports plain objects");
+      }
+
+      const result: { [key: string]: JsonValue } = {};
+      for (const [key, fieldValue] of Object.entries(value)) {
+        result[key] = assertJsonValue(fieldValue);
+      }
+      return result;
+    }
+    default:
+      throw new TypeError(`JSON value does not support ${typeof value}`);
+  }
+}
+
 export function canonicalJson(value: JsonValue): string {
   if (value === null) {
     return "null";
