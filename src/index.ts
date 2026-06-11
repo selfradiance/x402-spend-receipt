@@ -1,5 +1,13 @@
 export { canonicalJson, canonicalJsonBytes, canonicalSha256Hex, sha256Hex } from "./canonical.js";
 export type { JsonValue } from "./canonical.js";
+export { evaluatePolicy } from "./policy.js";
+export type {
+  AllowedReceiptHistoryEntry,
+  PolicyDecision,
+  PolicyEvaluation,
+  PolicyEvaluationOptions,
+  ReceiptHistoryReader
+} from "./policy.js";
 export {
   decisionSchema,
   intentSchema,
