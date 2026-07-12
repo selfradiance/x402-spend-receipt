@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { runCli } from "../src/cli.js";
@@ -195,5 +196,134 @@ describe("CLI", () => {
     expect(portableReceipt.public_key).toBe(
       readFileSync(join(configDir(workspace.configRoot), "ed25519.public.key"), "utf8").trim()
     );
+  });
+
+  it("record-settlement creates a signed record and reports machine-readable conflicts", async () => {
+    const workspace = await initializedWorkspace();
+    const firstIntentPath = join(workspace.root, "first-intent.json");
+    const secondIntentPath = join(workspace.root, "second-intent.json");
+    writeFileSync(firstIntentPath, `${JSON.stringify(validIntent)}\n`);
+    writeFileSync(secondIntentPath, `${JSON.stringify(validIntent)}\n`);
+
+    const firstCheck = await run(["check", firstIntentPath], workspace);
+    const secondCheck = await run(["check", secondIntentPath], workspace);
+    const firstReceipt = (JSON.parse(firstCheck.stdout) as { receipt: { receipt_id: string } }).receipt;
+    const secondReceipt = (JSON.parse(secondCheck.stdout) as { receipt: { receipt_id: string } }).receipt;
+    const txHash = `0x${"A".repeat(64)}`;
+
+    const settled = await run(
+      ["record-settlement", firstReceipt.receipt_id, "--tx", txHash, "--network", "eip155:8453"],
+      workspace
+    );
+    const settledOutput = JSON.parse(settled.stdout) as { ok: boolean; settlement: { tx_hash: string } };
+    const duplicate = await run(
+      ["record-settlement", firstReceipt.receipt_id, "--tx", txHash, "--network", "eip155:8453"],
+      workspace
+    );
+    const reusedTx = await run(
+      ["record-settlement", secondReceipt.receipt_id, "--tx", txHash, "--network", "eip155:8453"],
+      workspace
+    );
+
+    expect(settled.exitCode).toBe(0);
+    expect(settledOutput).toMatchObject({
+      ok: true,
+      settlement: { tx_hash: txHash.toLowerCase() }
+    });
+    expect(duplicate.exitCode).toBe(1);
+    expect(JSON.parse(duplicate.stdout)).toMatchObject({ ok: false, code: "ALREADY_SETTLED" });
+    expect(reusedTx.exitCode).toBe(1);
+    expect(JSON.parse(reusedTx.stdout)).toMatchObject({ ok: false, code: "TX_ALREADY_LINKED" });
+  });
+
+  it("record-settlement rejects deny, missing, malformed, and unmappable inputs with error envelopes", async () => {
+    const workspace = await initializedWorkspace();
+    const deniedIntentPath = join(workspace.root, "denied-intent.json");
+    writeFileSync(deniedIntentPath, `${JSON.stringify({ ...validIntent, amount_base_units: "101" })}\n`);
+
+    const deniedCheck = await run(["check", deniedIntentPath], workspace);
+    const deniedReceipt = (JSON.parse(deniedCheck.stdout) as { receipt: { receipt_id: string } }).receipt;
+    const denied = await run(
+      ["record-settlement", deniedReceipt.receipt_id, "--tx", `0x${"a".repeat(64)}`, "--network", "eip155:8453"],
+      workspace
+    );
+    const missing = await run(
+      ["record-settlement", "00000000-0000-4000-8000-000000000099", "--tx", `0x${"a".repeat(64)}`, "--network", "eip155:8453"],
+      workspace
+    );
+    const malformedHash = await run(
+      ["record-settlement", deniedReceipt.receipt_id, "--tx", "not-a-hash", "--network", "eip155:8453"],
+      workspace
+    );
+    const malformedNetwork = await run(
+      ["record-settlement", deniedReceipt.receipt_id, "--tx", `0x${"a".repeat(64)}`, "--network", "eip155"],
+      workspace
+    );
+
+    expect(JSON.parse(denied.stdout)).toMatchObject({ ok: false, code: "SETTLEMENT_ON_DENY" });
+    expect(JSON.parse(missing.stdout)).toMatchObject({ ok: false, code: "RECEIPT_NOT_FOUND" });
+    expect(JSON.parse(malformedHash.stdout)).toMatchObject({ ok: false, code: "INVALID_TX_HASH" });
+    expect(JSON.parse(malformedNetwork.stdout)).toMatchObject({ ok: false, code: "INVALID_NETWORK" });
+  });
+
+  it("record-settlement refuses a corrupt target receipt, corrupt facts, and broken chain", async () => {
+    const workspace = await initializedWorkspace();
+    const firstIntentPath = join(workspace.root, "first-intent.json");
+    const secondIntentPath = join(workspace.root, "second-intent.json");
+    writeFileSync(firstIntentPath, `${JSON.stringify(validIntent)}\n`);
+    writeFileSync(secondIntentPath, `${JSON.stringify(validIntent)}\n`);
+
+    const firstCheck = await run(["check", firstIntentPath], workspace);
+    const firstReceipt = (JSON.parse(firstCheck.stdout) as { receipt: { receipt_id: string } }).receipt;
+    const databasePath = join(configDir(workspace.configRoot), "ledger.sqlite");
+    const db = new Database(databasePath);
+    db.prepare("UPDATE payment_facts SET facts_json = ? WHERE receipt_id = ?")
+      .run(JSON.stringify({ invalid: true }), firstReceipt.receipt_id);
+    db.close();
+
+    const corruptFacts = await run(
+      ["record-settlement", firstReceipt.receipt_id, "--tx", `0x${"a".repeat(64)}`, "--network", "eip155:8453"],
+      workspace
+    );
+    expect(JSON.parse(corruptFacts.stdout)).toMatchObject({ ok: false, code: "FACTS_SIGNATURE_INVALID" });
+
+    const secondCheck = await run(["check", secondIntentPath], workspace);
+    const secondReceipt = (JSON.parse(secondCheck.stdout) as { receipt: { receipt_id: string } }).receipt;
+    const dbWithBrokenChain = new Database(databasePath);
+    dbWithBrokenChain
+      .prepare("UPDATE receipts SET receipt_json = ? WHERE receipt_id = ?")
+      .run(JSON.stringify({ invalid: true }), firstReceipt.receipt_id);
+    dbWithBrokenChain.close();
+
+    const brokenChain = await run(
+      ["record-settlement", secondReceipt.receipt_id, "--tx", `0x${"b".repeat(64)}`, "--network", "eip155:8453"],
+      workspace
+    );
+    expect(JSON.parse(brokenChain.stdout)).toMatchObject({ ok: false, code: "CHAIN_INVALID" });
+  });
+
+  it("record-settlement refuses a corrupt target receipt without creating a settlement", async () => {
+    const workspace = await initializedWorkspace();
+    const intentPath = join(workspace.root, "intent.json");
+    writeFileSync(intentPath, `${JSON.stringify(validIntent)}\n`);
+    const check = await run(["check", intentPath], workspace);
+    const receipt = (JSON.parse(check.stdout) as { receipt: { receipt_id: string } }).receipt;
+    const databasePath = join(configDir(workspace.configRoot), "ledger.sqlite");
+    const db = new Database(databasePath);
+    db.prepare("UPDATE receipts SET receipt_json = ? WHERE receipt_id = ?")
+      .run(JSON.stringify({ invalid: true }), receipt.receipt_id);
+    db.close();
+
+    const result = await run(
+      ["record-settlement", receipt.receipt_id, "--tx", `0x${"a".repeat(64)}`, "--network", "eip155:8453"],
+      workspace
+    );
+    const verificationDb = new Database(databasePath);
+    const checkRows = verificationDb.prepare("SELECT COUNT(*) AS count FROM settlements").get() as { count: number };
+    verificationDb.close();
+
+    expect(result.exitCode).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false, code: "RECEIPT_SIGNATURE_INVALID" });
+    expect(checkRows.count).toBe(0);
   });
 });
