@@ -13,6 +13,7 @@ import { basename, dirname, join } from "node:path";
 import { AggregationError, type AggregationArtifacts, verifyAggregateFromBundleRecords } from "./aggregation.js";
 import { createSignedAuditBundleManifest, verifyAuditBundleManifest } from "./bundles.js";
 import { sha256Hex } from "./canonical.js";
+import { keyIdFromPublicKey } from "./keys.js";
 import {
   type ReceiptLedgerReader,
   type StoredPaymentFactsRow,
@@ -172,8 +173,11 @@ function readManifest(bundleDir: string, publicKey: string): AuditBundleManifest
   if (!parsed.success) {
     throw new AuditBundleError("MANIFEST_SIGNATURE_INVALID", "Audit manifest does not match its schema");
   }
+  if (parsed.data.key_id !== keyIdFromPublicKey(publicKey)) {
+    throw new AuditBundleError("SIGNATURE_KEY_MISMATCH", "Audit manifest key does not match supplied public key");
+  }
   if (!verifyAuditBundleManifest(parsed.data, publicKey)) {
-    throw new AuditBundleError("SIGNATURE_KEY_MISMATCH", "Audit manifest signature verification failed");
+    throw new AuditBundleError("BUNDLE_ORDER_MISMATCH", "Audit manifest signature verification failed");
   }
   return parsed.data;
 }
@@ -189,10 +193,22 @@ function verifyInventory(bundleDir: string, manifest: AuditBundleManifest): void
 
   const actualPaths = listFiles(bundleDir).filter((path) => path !== "manifest.json");
   const expectedPaths = [...manifestPaths].sort(compareText);
-  if (actualPaths.some((path) => !expectedPaths.includes(path))) {
+  const unexpectedPaths = actualPaths.filter((path) => !expectedPaths.includes(path));
+  const missingPaths = expectedPaths.filter((path) => !actualPaths.includes(path));
+  if (
+    unexpectedPaths.length > 0 &&
+    missingPaths.length > 0 &&
+    [...unexpectedPaths, ...missingPaths].every((path) => path.startsWith("receipts/"))
+  ) {
+    throw new AuditBundleError("BUNDLE_ORDER_MISMATCH", "Audit receipt filenames no longer match signed order");
+  }
+  if (unexpectedPaths.length > 0 && hasDuplicateRecord(bundleDir, unexpectedPaths, actualPaths)) {
+    throw new AuditBundleError("BUNDLE_DUPLICATE_RECORD", "Audit bundle contains a duplicate record");
+  }
+  if (unexpectedPaths.length > 0) {
     throw new AuditBundleError("BUNDLE_EXTRANEOUS_RECORD", "Audit bundle contains an unrelated file");
   }
-  if (expectedPaths.some((path) => !actualPaths.includes(path))) {
+  if (missingPaths.length > 0) {
     throw new AuditBundleError("BUNDLE_MISSING_RECORD", "Audit bundle is missing an expected file");
   }
 
@@ -209,11 +225,47 @@ function verifyInventory(bundleDir: string, manifest: AuditBundleManifest): void
         throw new AuditBundleError("FACTS_SIGNATURE_INVALID", "Payment facts file differs from signed inventory");
       }
       if (file.path.startsWith("settlements/")) {
-        throw new AuditBundleError("SETTLEMENT_SIGNATURE_INVALID", "Settlement file differs from signed inventory");
+        throw new AuditBundleError("SETTLEMENT_BINDING_INVALID", "Settlement file differs from signed inventory");
       }
       throw new AuditBundleError("BUNDLE_ORDER_MISMATCH", "Audit file differs from signed inventory");
     }
   }
+}
+
+function hasDuplicateRecord(bundleDir: string, unexpectedPaths: readonly string[], actualPaths: readonly string[]): boolean {
+  const recordDirectories = ["receipts", "facts", "settlements"] as const;
+  for (const directory of recordDirectories) {
+    const expectedIds = new Set<string>();
+    for (const path of actualPaths) {
+      if (!path.startsWith(`${directory}/`) || unexpectedPaths.includes(path)) {
+        continue;
+      }
+      const id = recordIdentity(directory, readFileSync(join(bundleDir, path), "utf8"));
+      if (id !== null) {
+        expectedIds.add(id);
+      }
+    }
+    for (const path of unexpectedPaths) {
+      if (!path.startsWith(`${directory}/`)) {
+        continue;
+      }
+      const id = recordIdentity(directory, readFileSync(join(bundleDir, path), "utf8"));
+      if (id !== null && expectedIds.has(id)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function recordIdentity(directory: "receipts" | "facts" | "settlements", value: string): string | null {
+  const parsed = parseJson(value);
+  if (typeof parsed !== "object" || parsed === null) {
+    return null;
+  }
+  const field = directory === "facts" ? "facts_id" : directory === "settlements" ? "settlement_id" : "receipt_id";
+  const id = (parsed as Record<string, unknown>)[field];
+  return typeof id === "string" ? id : null;
 }
 
 function readBundleLedger(bundleDir: string, manifest: AuditBundleManifest): ReceiptLedgerReader {

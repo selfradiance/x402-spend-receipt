@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -57,6 +57,79 @@ function tempDbPath(): string {
   const tempDir = mkdtempSync(join(tmpdir(), "x402-spend-receipt-aggregate-"));
   tempDirs.push(tempDir);
   return join(tempDir, "ledger.sqlite");
+}
+
+function auditBundleFixture(options: { secondReceipt?: boolean; settlement?: boolean } = {}) {
+  const databasePath = tempDbPath();
+  const bundleDir = join(databasePath, "..", `audit-bundle-${Math.random().toString(16).slice(2)}`);
+  const ledger = new SqliteReceiptLedger(databasePath);
+  const keyPair = generateEd25519KeyPair();
+  const receiptIds = ["00000000-0000-4000-8000-000000000060", "00000000-0000-4000-8000-000000000061"];
+  const factsIds = ["00000000-0000-4000-8000-000000000062", "00000000-0000-4000-8000-000000000063"];
+  let receiptIndex = 0;
+  let factsIndex = 0;
+  const first = evaluateAndRecord(validIntent, validPolicy, {
+    ledger,
+    keyPair,
+    now: new Date("2026-06-10T22:00:00.000Z"),
+    receiptIdFactory: () => receiptIds[receiptIndex++] ?? "",
+    factsIdFactory: () => factsIds[factsIndex++] ?? ""
+  });
+  const second = options.secondReceipt
+    ? evaluateAndRecord(validIntent, validPolicy, {
+        ledger,
+        keyPair,
+        now: new Date("2026-06-10T22:01:00.000Z"),
+        receiptIdFactory: () => receiptIds[receiptIndex++] ?? "",
+        factsIdFactory: () => factsIds[factsIndex++] ?? ""
+      })
+    : null;
+  if (first.receipt === null || (second !== null && second.receipt === null)) {
+    throw new Error("Expected receipts");
+  }
+  const lastReceipt = second?.receipt ?? first.receipt;
+  if (options.settlement) {
+    ledger.appendSettlement(
+      createSignedSettlement({
+        settlementId: "00000000-0000-4000-8000-000000000064",
+        timestamp: "2026-06-10T22:02:00.000Z",
+        receiptId: first.receipt.receipt_id,
+        receiptHash: receiptHash(first.receipt),
+        txHash: `0x${"a".repeat(64)}`,
+        network: "eip155:8453",
+        keyPair
+      })
+    );
+  }
+  const aggregate = createAggregateFromLedger(ledger, {
+    range: {
+      type: "receipt_id",
+      from_id: first.receipt.receipt_id,
+      to_id: lastReceipt.receipt_id
+    },
+    keyPair,
+    aggregateId: "00000000-0000-4000-8000-000000000065",
+    createdAt: new Date("2026-06-10T22:03:00.000Z")
+  });
+  ledger.close();
+  writeAuditBundle({
+    outputDir: bundleDir,
+    artifacts: aggregate,
+    publicKey: keyPair.publicKey,
+    keyPair,
+    bundleId: "00000000-0000-4000-8000-000000000066",
+    createdAt: new Date("2026-06-10T22:04:00.000Z")
+  });
+
+  const firstBaseName = "000000000001-00000000-0000-4000-8000-000000000060.json";
+  return {
+    bundleDir,
+    keyPair,
+    firstReceiptPath: join(bundleDir, "receipts", firstBaseName),
+    firstFactsPath: join(bundleDir, "facts", firstBaseName),
+    firstSettlementPath: join(bundleDir, "settlements", firstBaseName),
+    summaryPath: join(bundleDir, "summary.json")
+  };
 }
 
 describe("aggregate primitives", () => {
@@ -288,6 +361,96 @@ describe("aggregate primitives", () => {
     expect(verifyAuditBundle(bundleDir, keyPair.publicKey)).toMatchObject({
       valid: false,
       code: "FACTS_SIGNATURE_INVALID"
+    });
+  });
+
+  it("reports BUNDLE_MISSING_RECORD when a receipt file is removed", () => {
+    const fixture = auditBundleFixture();
+    rmSync(fixture.firstReceiptPath);
+    expect(verifyAuditBundle(fixture.bundleDir, fixture.keyPair.publicKey)).toMatchObject({
+      valid: false,
+      code: "BUNDLE_MISSING_RECORD"
+    });
+  });
+
+  it("reports RECEIPT_SIGNATURE_INVALID when a receipt file is altered", () => {
+    const fixture = auditBundleFixture();
+    writeFileSync(fixture.firstReceiptPath, "{}\n");
+    expect(verifyAuditBundle(fixture.bundleDir, fixture.keyPair.publicKey)).toMatchObject({
+      valid: false,
+      code: "RECEIPT_SIGNATURE_INVALID"
+    });
+  });
+
+  it("reports BUNDLE_ORDER_MISMATCH when receipt filenames are reordered", () => {
+    const fixture = auditBundleFixture({ secondReceipt: true });
+    renameSync(
+      fixture.firstReceiptPath,
+      join(fixture.bundleDir, "receipts", "000000000003-00000000-0000-4000-8000-000000000060.json")
+    );
+    expect(verifyAuditBundle(fixture.bundleDir, fixture.keyPair.publicKey)).toMatchObject({
+      valid: false,
+      code: "BUNDLE_ORDER_MISMATCH"
+    });
+  });
+
+  it("reports FACTS_SIGNATURE_INVALID when payment facts are altered", () => {
+    const fixture = auditBundleFixture();
+    const facts = JSON.parse(readFileSync(fixture.firstFactsPath, "utf8")) as { amount_base_units: string };
+    writeFileSync(fixture.firstFactsPath, `${JSON.stringify({ ...facts, amount_base_units: "101" })}\n`);
+    expect(verifyAuditBundle(fixture.bundleDir, fixture.keyPair.publicKey)).toMatchObject({
+      valid: false,
+      code: "FACTS_SIGNATURE_INVALID"
+    });
+  });
+
+  it("reports SETTLEMENT_BINDING_INVALID when settlement data is re-pointed", () => {
+    const fixture = auditBundleFixture({ settlement: true });
+    const settlement = JSON.parse(readFileSync(fixture.firstSettlementPath, "utf8")) as { receipt_hash: string };
+    writeFileSync(fixture.firstSettlementPath, `${JSON.stringify({ ...settlement, receipt_hash: "b".repeat(64) })}\n`);
+    expect(verifyAuditBundle(fixture.bundleDir, fixture.keyPair.publicKey)).toMatchObject({
+      valid: false,
+      code: "SETTLEMENT_BINDING_INVALID"
+    });
+  });
+
+  it("reports TOTALS_MISMATCH when a summary total is inflated", () => {
+    const fixture = auditBundleFixture();
+    const summary = JSON.parse(readFileSync(fixture.summaryPath, "utf8")) as { totals: Array<{ unsettled_allow_base_units: string }> };
+    summary.totals[0]!.unsettled_allow_base_units = "999";
+    writeFileSync(fixture.summaryPath, `${JSON.stringify(summary)}\n`);
+    expect(verifyAuditBundle(fixture.bundleDir, fixture.keyPair.publicKey)).toMatchObject({
+      valid: false,
+      code: "TOTALS_MISMATCH"
+    });
+  });
+
+  it("reports SIGNATURE_KEY_MISMATCH when given the wrong trusted key", () => {
+    const fixture = auditBundleFixture();
+    expect(verifyAuditBundle(fixture.bundleDir, generateEd25519KeyPair().publicKey)).toMatchObject({
+      valid: false,
+      code: "SIGNATURE_KEY_MISMATCH"
+    });
+  });
+
+  it("reports BUNDLE_EXTRANEOUS_RECORD for unrelated facts", () => {
+    const fixture = auditBundleFixture();
+    writeFileSync(join(fixture.bundleDir, "facts", "000000000099-unrelated.json"), '{"facts_id":"unrelated"}\n');
+    expect(verifyAuditBundle(fixture.bundleDir, fixture.keyPair.publicKey)).toMatchObject({
+      valid: false,
+      code: "BUNDLE_EXTRANEOUS_RECORD"
+    });
+  });
+
+  it("reports BUNDLE_DUPLICATE_RECORD for a duplicate facts file", () => {
+    const fixture = auditBundleFixture();
+    writeFileSync(
+      join(fixture.bundleDir, "facts", "000000000099-duplicate.json"),
+      readFileSync(fixture.firstFactsPath, "utf8")
+    );
+    expect(verifyAuditBundle(fixture.bundleDir, fixture.keyPair.publicKey)).toMatchObject({
+      valid: false,
+      code: "BUNDLE_DUPLICATE_RECORD"
     });
   });
 });
