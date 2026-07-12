@@ -11,6 +11,13 @@ export {
   verifyAggregateSummary
 } from "./aggregates.js";
 export type { SignedAggregateSummaryInput, UnsignedAggregateSummary } from "./aggregates.js";
+export { AggregationError, createAggregateFromLedger, verifyAggregateInLedger } from "./aggregation.js";
+export type {
+  AggregateLedgerOptions,
+  AggregationArtifacts,
+  AggregationErrorCode,
+  AggregateVerificationResult
+} from "./aggregation.js";
 export { generateEd25519KeyPair, keyIdFromPublicKey, signBytes, verifyBytes } from "./keys.js";
 export type { Ed25519KeyPair } from "./keys.js";
 export { SqliteReceiptLedger } from "./ledger.js";
@@ -38,6 +45,7 @@ export {
   verifySettlement
 } from "./settlements.js";
 export type { SignedSettlementInput, UnsignedSettlement } from "./settlements.js";
+export { isCaip2Network, mapFactsNetwork, normalizeTransactionHash } from "./network.js";
 export { evaluatePolicy } from "./policy.js";
 export type {
   AllowedReceiptHistoryEntry,

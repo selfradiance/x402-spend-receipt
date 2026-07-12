@@ -8,7 +8,7 @@ const aggregateSigningPrefix = "xsr/aggregate/v1\n";
 
 export type UnsignedAggregateSummary = Omit<AggregateSummary, "signature">;
 
-export interface SignedAggregateSummaryInput extends UnsignedAggregateSummary {
+export interface SignedAggregateSummaryInput extends Omit<UnsignedAggregateSummary, "key_id"> {
   keyPair: Ed25519KeyPair;
 }
 

@@ -1,13 +1,59 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  AggregationError,
+  createAggregateFromLedger,
   createSignedAggregateSummary,
+  createSignedSettlement,
+  createSignedReceipt,
+  evaluateAndRecord,
   generateEd25519KeyPair,
   merkleRoot,
+  receiptHash,
+  SqliteReceiptLedger,
+  verifyAggregateInLedger,
   verifyAggregateSummary
 } from "../src/index.js";
 
 const hashes = ["0", "1", "2", "3", "4", "5"].map((character) => character.repeat(64));
+const tempDirs: string[] = [];
+
+const validIntent = {
+  method: "x402",
+  endpoint_url: "https://api.example.com/metered",
+  pay_to: "0xabc123",
+  asset: "USDC",
+  network: "base",
+  amount_base_units: "100",
+  agent_urn: "urn:agent:demo"
+};
+
+const validPolicy = {
+  max_per_payment_base_units: "100",
+  session_budget_base_units: "1000",
+  pay_to_allowlist: ["0xabc123"],
+  endpoint_host_allowlist: ["api.example.com"],
+  repeat_payment_rule: {
+    max_repeats: 10,
+    window_seconds: 60
+  }
+};
+
+afterEach(() => {
+  for (const tempDir of tempDirs.splice(0)) {
+    rmSync(tempDir, { force: true, recursive: true });
+  }
+});
+
+function tempDbPath(): string {
+  const tempDir = mkdtempSync(join(tmpdir(), "x402-spend-receipt-aggregate-"));
+  tempDirs.push(tempDir);
+  return join(tempDir, "ledger.sqlite");
+}
 
 describe("aggregate primitives", () => {
   it("matches RFC 6962 Merkle vectors for one through six leaves", () => {
@@ -61,5 +107,109 @@ describe("aggregate primitives", () => {
     expect(verifyAggregateSummary(summary, keyPair.publicKey)).toBe(true);
     expect(verifyAggregateSummary({ ...summary, receipt_count: 2 }, keyPair.publicKey)).toBe(false);
     expect(verifyAggregateSummary({ ...summary, totals: [] }, keyPair.publicKey)).toBe(false);
+  });
+
+  it("aggregates verified receipt facts and settlements without mixing units", () => {
+    const ledger = new SqliteReceiptLedger(tempDbPath());
+    const keyPair = generateEd25519KeyPair();
+    const receiptIds = ["00000000-0000-4000-8000-000000000040", "00000000-0000-4000-8000-000000000041"];
+    const factsIds = ["00000000-0000-4000-8000-000000000042", "00000000-0000-4000-8000-000000000043"];
+    let receiptIndex = 0;
+    let factsIndex = 0;
+
+    const first = evaluateAndRecord(validIntent, validPolicy, {
+      ledger,
+      keyPair,
+      now: new Date("2026-06-10T22:00:00.000Z"),
+      receiptIdFactory: () => receiptIds[receiptIndex++] ?? "",
+      factsIdFactory: () => factsIds[factsIndex++] ?? ""
+    });
+    const second = evaluateAndRecord({ ...validIntent, asset: "EURC", amount_base_units: "50" }, { ...validPolicy, max_per_payment_base_units: "100" }, {
+      ledger,
+      keyPair,
+      now: new Date("2026-06-10T22:01:00.000Z"),
+      receiptIdFactory: () => receiptIds[receiptIndex++] ?? "",
+      factsIdFactory: () => factsIds[factsIndex++] ?? ""
+    });
+    if (first.receipt === null || second.receipt === null) {
+      throw new Error("Expected receipts");
+    }
+    ledger.appendSettlement(
+      createSignedSettlement({
+        settlementId: "00000000-0000-4000-8000-000000000044",
+        timestamp: "2026-06-10T22:02:00.000Z",
+        receiptId: first.receipt.receipt_id,
+        receiptHash: receiptHash(first.receipt),
+        txHash: `0x${"a".repeat(64)}`,
+        network: "eip155:8453",
+        keyPair
+      })
+    );
+
+    const aggregate = createAggregateFromLedger(ledger, {
+      range: {
+        type: "receipt_id",
+        from_id: first.receipt.receipt_id,
+        to_id: second.receipt.receipt_id
+      },
+      aggregateId: "00000000-0000-4000-8000-000000000045",
+      createdAt: new Date("2026-06-10T22:03:00.000Z"),
+      keyPair
+    });
+
+    expect(aggregate.summary.receipt_count).toBe(2);
+    expect(aggregate.summary.decision_counts).toEqual({ ALLOW: 2, DENY: 0 });
+    expect(aggregate.summary.totals).toEqual([
+      {
+        asset: "EURC",
+        network: "eip155:8453",
+        settled_base_units: "0",
+        unsettled_allow_base_units: "50"
+      },
+      {
+        asset: "USDC",
+        network: "eip155:8453",
+        settled_base_units: "100",
+        unsettled_allow_base_units: "0"
+      }
+    ]);
+    expect(verifyAggregateInLedger(ledger, aggregate.summary, keyPair.publicKey)).toEqual({ valid: true });
+    expect(verifyAggregateInLedger(ledger, { ...aggregate.summary, receipt_count: 3 }, keyPair.publicKey)).toMatchObject({
+      valid: false,
+      code: "SUMMARY_SIGNATURE_INVALID"
+    });
+
+    ledger.close();
+  });
+
+  it("rejects legacy receipts unless the caller explicitly allows unproven totals", () => {
+    const ledger = new SqliteReceiptLedger(tempDbPath());
+    const keyPair = generateEd25519KeyPair();
+    const legacyReceipt = createSignedReceipt({
+      receiptId: "00000000-0000-4000-8000-000000000046",
+      timestamp: "2026-06-10T22:00:00.000Z",
+      agentUrn: "urn:agent:demo",
+      intentDigest: "a".repeat(64),
+      policyDigest: "b".repeat(64),
+      decision: "ALLOW",
+      reasonCode: "ALLOWED",
+      prevReceiptHash: null,
+      keyPair
+    });
+    ledger.appendReceipt(legacyReceipt, { endpointUrl: "https://api.example.com/metered", amountBaseUnits: "100" });
+    const range = {
+      type: "receipt_id" as const,
+      from_id: legacyReceipt.receipt_id,
+      to_id: legacyReceipt.receipt_id
+    };
+
+    expect(() => createAggregateFromLedger(ledger, { range, keyPair })).toThrowError(
+      expect.objectContaining<Partial<AggregationError>>({ code: "LEGACY_RECEIPTS_IN_RANGE" })
+    );
+    const allowed = createAggregateFromLedger(ledger, { range, allowLegacy: true, keyPair });
+    expect(allowed.summary.legacy_unproven_count).toBe(1);
+    expect(allowed.summary.totals).toEqual([]);
+
+    ledger.close();
   });
 });
