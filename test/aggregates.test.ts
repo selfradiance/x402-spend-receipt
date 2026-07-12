@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   AggregationError,
+  createSignedAuditBundleManifest,
   createAggregateFromLedger,
   createSignedAggregateSummary,
   createSignedSettlement,
@@ -15,6 +16,7 @@ import {
   merkleRoot,
   receiptHash,
   SqliteReceiptLedger,
+  verifyAuditBundleManifest,
   verifyAggregateInLedger,
   verifyAggregateSummary
 } from "../src/index.js";
@@ -107,6 +109,33 @@ describe("aggregate primitives", () => {
     expect(verifyAggregateSummary(summary, keyPair.publicKey)).toBe(true);
     expect(verifyAggregateSummary({ ...summary, receipt_count: 2 }, keyPair.publicKey)).toBe(false);
     expect(verifyAggregateSummary({ ...summary, totals: [] }, keyPair.publicKey)).toBe(false);
+  });
+
+  it("signs bundle manifests and detects inventory tampering", () => {
+    const keyPair = generateEd25519KeyPair();
+    const manifest = createSignedAuditBundleManifest({
+      schema_version: "1.0",
+      bundle_id: "00000000-0000-4000-8000-000000000032",
+      created_at: "2026-06-10T22:00:00.000Z",
+      receipts: [
+        {
+          receipt_id: "00000000-0000-4000-8000-000000000031",
+          receipt_hash: hashes[0] ?? ""
+        }
+      ],
+      files: [
+        { path: "summary.json", sha256: hashes[1] ?? "" },
+        { path: "receipts/000000000001-00000000-0000-4000-8000-000000000031.json", sha256: hashes[2] ?? "" }
+      ],
+      summary_sha256: hashes[1] ?? "",
+      keyPair
+    });
+
+    expect(verifyAuditBundleManifest(manifest, keyPair.publicKey)).toBe(true);
+    expect(verifyAuditBundleManifest({ ...manifest, receipts: [] }, keyPair.publicKey)).toBe(false);
+    expect(
+      verifyAuditBundleManifest({ ...manifest, files: [{ path: "summary.json", sha256: hashes[3] ?? "" }] }, keyPair.publicKey)
+    ).toBe(false);
   });
 
   it("aggregates verified receipt facts and settlements without mixing units", () => {

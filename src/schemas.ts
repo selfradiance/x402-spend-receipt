@@ -182,6 +182,33 @@ export const aggregateSummarySchema = z
   })
   .strict();
 
+export const auditBundleReceiptSchema = z
+  .object({
+    receipt_id: z.string().uuid(),
+    receipt_hash: sha256HexSchema
+  })
+  .strict();
+
+export const auditBundleFileSchema = z
+  .object({
+    path: z.string().min(1),
+    sha256: sha256HexSchema
+  })
+  .strict();
+
+export const auditBundleManifestSchema = z
+  .object({
+    schema_version: z.literal("1.0"),
+    bundle_id: z.string().uuid(),
+    created_at: z.string().datetime({ offset: true }),
+    receipts: z.array(auditBundleReceiptSchema).min(1),
+    files: z.array(auditBundleFileSchema),
+    summary_sha256: sha256HexSchema,
+    key_id: z.string(),
+    signature: ed25519SignatureSchema
+  })
+  .strict();
+
 export type Decision = z.infer<typeof decisionSchema>;
 export type Intent = z.infer<typeof intentSchema>;
 export type Policy = z.infer<typeof policySchema>;
@@ -193,6 +220,7 @@ export type Settlement = z.infer<typeof settlementSchema>;
 export type AggregateRange = z.infer<typeof aggregateRangeSchema>;
 export type AggregateTotals = z.infer<typeof aggregateTotalsSchema>;
 export type AggregateSummary = z.infer<typeof aggregateSummarySchema>;
+export type AuditBundleManifest = z.infer<typeof auditBundleManifestSchema>;
 
 export function isFactsEligibleReasonCode(reasonCode: ReasonCode): reasonCode is FactsEligibleReasonCode {
   return (factsEligibleReasonCodes as readonly string[]).includes(reasonCode);

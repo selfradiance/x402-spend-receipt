@@ -11,6 +11,14 @@ export {
   verifyAggregateSummary
 } from "./aggregates.js";
 export type { SignedAggregateSummaryInput, UnsignedAggregateSummary } from "./aggregates.js";
+export {
+  auditBundleManifestHash,
+  auditBundleManifestSigningBytes,
+  canonicalAuditBundleManifestJson,
+  createSignedAuditBundleManifest,
+  verifyAuditBundleManifest
+} from "./bundles.js";
+export type { SignedAuditBundleManifestInput, UnsignedAuditBundleManifest } from "./bundles.js";
 export { AggregationError, createAggregateFromLedger, verifyAggregateInLedger } from "./aggregation.js";
 export type {
   AggregateLedgerOptions,
@@ -62,6 +70,9 @@ export {
   aggregateRangeSchema,
   aggregateSummarySchema,
   aggregateTotalsSchema,
+  auditBundleFileSchema,
+  auditBundleManifestSchema,
+  auditBundleReceiptSchema,
   decisionCountsSchema,
   decisionSchema,
   factsEligibleReasonCodes,
@@ -80,6 +91,7 @@ export type {
   AggregateRange,
   AggregateSummary,
   AggregateTotals,
+  AuditBundleManifest,
   Decision,
   FactsEligibleReasonCode,
   Intent,
