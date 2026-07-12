@@ -19,7 +19,9 @@ export {
   verifyAuditBundleManifest
 } from "./bundles.js";
 export type { SignedAuditBundleManifestInput, UnsignedAuditBundleManifest } from "./bundles.js";
-export { AggregationError, createAggregateFromLedger, verifyAggregateInLedger } from "./aggregation.js";
+export { AuditBundleError, verifyAuditBundle, writeAuditBundle } from "./audit.js";
+export type { AuditBundleErrorCode, AuditBundleVerificationResult, WriteAuditBundleOptions } from "./audit.js";
+export { AggregationError, createAggregateFromLedger, verifyAggregateFromBundleRecords, verifyAggregateInLedger } from "./aggregation.js";
 export type {
   AggregateLedgerOptions,
   AggregationArtifacts,

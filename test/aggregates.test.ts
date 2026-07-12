@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -16,9 +16,11 @@ import {
   merkleRoot,
   receiptHash,
   SqliteReceiptLedger,
+  verifyAuditBundle,
   verifyAuditBundleManifest,
   verifyAggregateInLedger,
-  verifyAggregateSummary
+  verifyAggregateSummary,
+  writeAuditBundle
 } from "../src/index.js";
 
 const hashes = ["0", "1", "2", "3", "4", "5"].map((character) => character.repeat(64));
@@ -240,5 +242,52 @@ describe("aggregate primitives", () => {
     expect(allowed.summary.totals).toEqual([]);
 
     ledger.close();
+  });
+
+  it("writes and independently verifies an ordered audit bundle", () => {
+    const databasePath = tempDbPath();
+    const bundleDir = join(databasePath, "..", "audit-bundle");
+    const ledger = new SqliteReceiptLedger(databasePath);
+    const keyPair = generateEd25519KeyPair();
+    const result = evaluateAndRecord(validIntent, validPolicy, {
+      ledger,
+      keyPair,
+      now: new Date("2026-06-10T22:00:00.000Z"),
+      receiptIdFactory: () => "00000000-0000-4000-8000-000000000047",
+      factsIdFactory: () => "00000000-0000-4000-8000-000000000048"
+    });
+    if (result.receipt === null) {
+      throw new Error("Expected receipt");
+    }
+    const aggregate = createAggregateFromLedger(ledger, {
+      range: {
+        type: "receipt_id",
+        from_id: result.receipt.receipt_id,
+        to_id: result.receipt.receipt_id
+      },
+      keyPair,
+      aggregateId: "00000000-0000-4000-8000-000000000049",
+      createdAt: new Date("2026-06-10T22:01:00.000Z")
+    });
+    ledger.close();
+
+    writeAuditBundle({
+      outputDir: bundleDir,
+      artifacts: aggregate,
+      publicKey: keyPair.publicKey,
+      keyPair,
+      bundleId: "00000000-0000-4000-8000-000000000050",
+      createdAt: new Date("2026-06-10T22:02:00.000Z")
+    });
+
+    expect(verifyAuditBundle(bundleDir, keyPair.publicKey)).toEqual({ valid: true });
+
+    const factsPath = join(bundleDir, "facts", "000000000001-00000000-0000-4000-8000-000000000047.json");
+    const facts = JSON.parse(readFileSync(factsPath, "utf8")) as { amount_base_units: string };
+    writeFileSync(factsPath, `${JSON.stringify({ ...facts, amount_base_units: "101" })}\n`);
+    expect(verifyAuditBundle(bundleDir, keyPair.publicKey)).toMatchObject({
+      valid: false,
+      code: "FACTS_SIGNATURE_INVALID"
+    });
   });
 });

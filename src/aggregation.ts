@@ -139,13 +139,30 @@ export function verifyAggregateInLedger(
   summaryInput: unknown,
   publicKey: string
 ): AggregateVerificationResult {
+  return verifyAggregate(ledger, summaryInput, publicKey, true);
+}
+
+export function verifyAggregateFromBundleRecords(
+  ledger: ReceiptLedgerReader,
+  summaryInput: unknown,
+  publicKey: string
+): AggregateVerificationResult {
+  return verifyAggregate(ledger, summaryInput, publicKey, false);
+}
+
+function verifyAggregate(
+  ledger: ReceiptLedgerReader,
+  summaryInput: unknown,
+  publicKey: string,
+  verifyFullChain: boolean
+): AggregateVerificationResult {
   const parsed = aggregateSummarySchema.safeParse(summaryInput);
   if (!parsed.success || !verifyAggregateSummary(parsed.data, publicKey)) {
     return fail("SUMMARY_SIGNATURE_INVALID", "Aggregate summary signature verification failed");
   }
 
   try {
-    const computed = computeAggregate(ledger, parsed.data.range, publicKey, parsed.data.legacy_unproven_count > 0);
+    const computed = computeAggregate(ledger, parsed.data.range, publicKey, parsed.data.legacy_unproven_count > 0, verifyFullChain);
     const expected = {
       receipt_count: computed.receiptCount,
       decision_counts: computed.decisionCounts,
@@ -188,11 +205,14 @@ function computeAggregate(
   ledger: ReceiptLedgerReader,
   range: AggregateRange,
   publicKey: string,
-  allowLegacy: boolean
+  allowLegacy: boolean,
+  verifyFullChain = true
 ): ComputedAggregate {
-  const chain = verifyChain(ledger, publicKey);
-  if (!chain.valid) {
-    throw new AggregationError("CHAIN_INVALID", chain.error ?? "Receipt chain verification failed");
+  if (verifyFullChain) {
+    const chain = verifyChain(ledger, publicKey);
+    if (!chain.valid) {
+      throw new AggregationError("CHAIN_INVALID", chain.error ?? "Receipt chain verification failed");
+    }
   }
 
   const selected = selectReceipts(ledger.listReceiptRows(), range, publicKey);
