@@ -115,6 +115,73 @@ export const settlementSchema = z
   })
   .strict();
 
+export const aggregateRangeSchema = z.union([
+  z
+    .object({
+      type: z.literal("receipt_id"),
+      from_id: z.string().uuid(),
+      to_id: z.string().uuid()
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("time"),
+      since: z.string().datetime({ offset: true }),
+      until: z.string().datetime({ offset: true })
+    })
+    .strict()
+]);
+
+export const aggregateTotalsSchema = z
+  .object({
+    asset: z.string(),
+    network: z.string(),
+    settled_base_units: nonNegativeIntegerStringSchema,
+    unsettled_allow_base_units: nonNegativeIntegerStringSchema
+  })
+  .strict();
+
+export const decisionCountsSchema = z
+  .object({
+    ALLOW: z.number().int().nonnegative(),
+    DENY: z.number().int().nonnegative()
+  })
+  .strict();
+
+export const reasonCodeCountsSchema = z
+  .object({
+    ALLOWED: z.number().int().nonnegative(),
+    AMOUNT_EXCEEDS_PER_PAYMENT_MAX: z.number().int().nonnegative(),
+    SESSION_BUDGET_EXCEEDED: z.number().int().nonnegative(),
+    PAY_TO_NOT_ALLOWED: z.number().int().nonnegative(),
+    HOST_NOT_ALLOWED: z.number().int().nonnegative(),
+    REPEAT_PAYMENT_LOOP: z.number().int().nonnegative(),
+    INTENT_INVALID: z.number().int().nonnegative(),
+    POLICY_INVALID: z.number().int().nonnegative()
+  })
+  .strict();
+
+export const aggregateSummarySchema = z
+  .object({
+    schema_version: z.literal("1.0"),
+    aggregate_id: z.string().uuid(),
+    created_at: z.string().datetime({ offset: true }),
+    range: aggregateRangeSchema,
+    receipt_count: z.number().int().positive(),
+    decision_counts: decisionCountsSchema,
+    reason_code_counts: reasonCodeCountsSchema,
+    invalid_intent_count: z.number().int().nonnegative(),
+    invalid_policy_count: z.number().int().nonnegative(),
+    legacy_unproven_count: z.number().int().nonnegative(),
+    totals: z.array(aggregateTotalsSchema),
+    first_receipt_hash: sha256HexSchema,
+    last_receipt_hash: sha256HexSchema,
+    merkle_root: sha256HexSchema,
+    key_id: z.string(),
+    signature: ed25519SignatureSchema
+  })
+  .strict();
+
 export type Decision = z.infer<typeof decisionSchema>;
 export type Intent = z.infer<typeof intentSchema>;
 export type Policy = z.infer<typeof policySchema>;
@@ -123,6 +190,9 @@ export type Receipt = z.infer<typeof receiptSchema>;
 export type FactsEligibleReasonCode = (typeof factsEligibleReasonCodes)[number];
 export type PaymentFacts = z.infer<typeof paymentFactsSchema>;
 export type Settlement = z.infer<typeof settlementSchema>;
+export type AggregateRange = z.infer<typeof aggregateRangeSchema>;
+export type AggregateTotals = z.infer<typeof aggregateTotalsSchema>;
+export type AggregateSummary = z.infer<typeof aggregateSummarySchema>;
 
 export function isFactsEligibleReasonCode(reasonCode: ReasonCode): reasonCode is FactsEligibleReasonCode {
   return (factsEligibleReasonCodes as readonly string[]).includes(reasonCode);

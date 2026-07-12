@@ -2,6 +2,15 @@ export { assertJsonValue, canonicalJson, canonicalJsonBytes, canonicalSha256Hex,
 export type { JsonValue } from "./canonical.js";
 export { verifyChain } from "./chain.js";
 export type { ChainVerificationResult } from "./chain.js";
+export {
+  aggregateSummaryHash,
+  aggregateSummarySigningBytes,
+  canonicalAggregateSummaryJson,
+  createSignedAggregateSummary,
+  merkleRoot,
+  verifyAggregateSummary
+} from "./aggregates.js";
+export type { SignedAggregateSummaryInput, UnsignedAggregateSummary } from "./aggregates.js";
 export { generateEd25519KeyPair, keyIdFromPublicKey, signBytes, verifyBytes } from "./keys.js";
 export type { Ed25519KeyPair } from "./keys.js";
 export { SqliteReceiptLedger } from "./ledger.js";
@@ -42,6 +51,10 @@ export type { SignedReceiptInput, UnsignedReceipt } from "./receipts.js";
 export { evaluateAndRecord } from "./record.js";
 export type { EvaluateAndRecordOptions, EvaluateAndRecordResult } from "./record.js";
 export {
+  aggregateRangeSchema,
+  aggregateSummarySchema,
+  aggregateTotalsSchema,
+  decisionCountsSchema,
   decisionSchema,
   factsEligibleReasonCodes,
   intentSchema,
@@ -50,8 +63,21 @@ export {
   paymentFactsSchema,
   policySchema,
   reasonCodes,
+  reasonCodeCountsSchema,
   reasonCodeSchema,
   receiptSchema,
   settlementSchema
 } from "./schemas.js";
-export type { Decision, FactsEligibleReasonCode, Intent, PaymentFacts, Policy, ReasonCode, Receipt, Settlement } from "./schemas.js";
+export type {
+  AggregateRange,
+  AggregateSummary,
+  AggregateTotals,
+  Decision,
+  FactsEligibleReasonCode,
+  Intent,
+  PaymentFacts,
+  Policy,
+  ReasonCode,
+  Receipt,
+  Settlement
+} from "./schemas.js";
