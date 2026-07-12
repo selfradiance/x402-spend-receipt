@@ -9,8 +9,26 @@ export type {
   ReceiptLedgerMetadata,
   ReceiptLedgerReader,
   ReceiptLedgerWriter,
-  StoredReceiptRow
+  StoredPaymentFactsRow,
+  StoredReceiptRow,
+  StoredSettlementRow
 } from "./ledger.js";
+export {
+  canonicalPaymentFactsJson,
+  createSignedPaymentFacts,
+  paymentFactsHash,
+  paymentFactsSigningBytes,
+  verifyPaymentFacts
+} from "./facts.js";
+export type { SignedPaymentFactsInput, UnsignedPaymentFacts } from "./facts.js";
+export {
+  canonicalSettlementJson,
+  createSignedSettlement,
+  settlementHash,
+  settlementSigningBytes,
+  verifySettlement
+} from "./settlements.js";
+export type { SignedSettlementInput, UnsignedSettlement } from "./settlements.js";
 export { evaluatePolicy } from "./policy.js";
 export type {
   AllowedReceiptHistoryEntry,
@@ -25,11 +43,15 @@ export { evaluateAndRecord } from "./record.js";
 export type { EvaluateAndRecordOptions, EvaluateAndRecordResult } from "./record.js";
 export {
   decisionSchema,
+  factsEligibleReasonCodes,
   intentSchema,
+  isFactsEligibleReasonCode,
   nonNegativeIntegerStringSchema,
+  paymentFactsSchema,
   policySchema,
   reasonCodes,
   reasonCodeSchema,
-  receiptSchema
+  receiptSchema,
+  settlementSchema
 } from "./schemas.js";
-export type { Decision, Intent, Policy, ReasonCode, Receipt } from "./schemas.js";
+export type { Decision, FactsEligibleReasonCode, Intent, PaymentFacts, Policy, ReasonCode, Receipt, Settlement } from "./schemas.js";

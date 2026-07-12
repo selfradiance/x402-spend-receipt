@@ -1,17 +1,19 @@
 import { randomUUID } from "node:crypto";
 
 import { assertJsonValue, canonicalSha256Hex } from "./canonical.js";
+import { createSignedPaymentFacts } from "./facts.js";
 import { type Ed25519KeyPair } from "./keys.js";
 import { type ReceiptLedgerWriter } from "./ledger.js";
 import { evaluatePolicy } from "./policy.js";
-import { createSignedReceipt } from "./receipts.js";
-import { intentSchema, type Decision, type ReasonCode, type Receipt } from "./schemas.js";
+import { createSignedReceipt, receiptHash } from "./receipts.js";
+import { intentSchema, isFactsEligibleReasonCode, type Decision, type ReasonCode, type Receipt } from "./schemas.js";
 
 export interface EvaluateAndRecordOptions {
   ledger: ReceiptLedgerWriter;
   keyPair: Ed25519KeyPair;
   now?: Date;
   receiptIdFactory?: () => string;
+  factsIdFactory?: () => string;
 }
 
 export interface EvaluateAndRecordResult {
@@ -45,10 +47,25 @@ export function evaluateAndRecord(
       keyPair: options.keyPair
     });
 
+    const paymentFacts =
+      parsedIntent.success && isFactsEligibleReasonCode(evaluation.reasonCode)
+        ? createSignedPaymentFacts({
+            factsId: options.factsIdFactory?.() ?? randomUUID(),
+            timestamp: now.toISOString(),
+            receiptId: receipt.receipt_id,
+            receiptHash: receiptHash(receipt),
+            amountBaseUnits: parsedIntent.data.amount_base_units,
+            asset: parsedIntent.data.asset,
+            network: parsedIntent.data.network,
+            payTo: parsedIntent.data.pay_to,
+            keyPair: options.keyPair
+          })
+        : undefined;
+
     options.ledger.appendReceipt(receipt, {
       endpointUrl: parsedIntent.success ? parsedIntent.data.endpoint_url : null,
       amountBaseUnits: parsedIntent.success ? parsedIntent.data.amount_base_units : null
-    });
+    }, paymentFacts);
 
     return {
       decision: receipt.decision,

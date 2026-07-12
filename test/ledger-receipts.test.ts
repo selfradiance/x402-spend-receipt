@@ -212,7 +212,14 @@ describe("signing and ledger receipts", () => {
       getReceiptRowById: () => null,
       listAllowedReceipts: () => [],
       listReceiptRows: () => [],
+      getPaymentFactsRowByReceiptId: () => null,
+      listPaymentFactsRows: () => [],
+      getSettlementRowByReceiptId: () => null,
+      listSettlementRows: () => [],
       appendReceipt: () => {
+        throw new Error("disk full");
+      },
+      appendSettlement: () => {
         throw new Error("disk full");
       }
     };

@@ -11,6 +11,15 @@ export const reasonCodes = [
   "POLICY_INVALID"
 ] as const;
 
+export const factsEligibleReasonCodes = [
+  "ALLOWED",
+  "AMOUNT_EXCEEDS_PER_PAYMENT_MAX",
+  "SESSION_BUDGET_EXCEEDED",
+  "PAY_TO_NOT_ALLOWED",
+  "HOST_NOT_ALLOWED",
+  "REPEAT_PAYMENT_LOOP"
+] as const;
+
 export const decisionSchema = z.enum(["ALLOW", "DENY"]);
 export const reasonCodeSchema = z.enum(reasonCodes);
 
@@ -59,8 +68,48 @@ export const receiptSchema = z
   })
   .strict();
 
+const ed25519SignatureSchema = z.string();
+const sha256HexSchema = z.string().regex(/^[a-f0-9]{64}$/);
+
+export const paymentFactsSchema = z
+  .object({
+    schema_version: z.literal("1.0"),
+    facts_id: z.string().uuid(),
+    timestamp: z.string().datetime({ offset: true }),
+    receipt_id: z.string().uuid(),
+    receipt_hash: sha256HexSchema,
+    amount_base_units: nonNegativeIntegerStringSchema,
+    asset: z.string(),
+    network: z.string(),
+    pay_to: z.string(),
+    key_id: z.string(),
+    signature: ed25519SignatureSchema
+  })
+  .strict();
+
+export const settlementSchema = z
+  .object({
+    schema_version: z.literal("1.0"),
+    settlement_id: z.string().uuid(),
+    timestamp: z.string().datetime({ offset: true }),
+    receipt_id: z.string().uuid(),
+    receipt_hash: sha256HexSchema,
+    tx_hash: z.string().regex(/^0x[0-9a-f]{64}$/),
+    network: z.string(),
+    key_id: z.string(),
+    signature: ed25519SignatureSchema
+  })
+  .strict();
+
 export type Decision = z.infer<typeof decisionSchema>;
 export type Intent = z.infer<typeof intentSchema>;
 export type Policy = z.infer<typeof policySchema>;
 export type ReasonCode = z.infer<typeof reasonCodeSchema>;
 export type Receipt = z.infer<typeof receiptSchema>;
+export type FactsEligibleReasonCode = (typeof factsEligibleReasonCodes)[number];
+export type PaymentFacts = z.infer<typeof paymentFactsSchema>;
+export type Settlement = z.infer<typeof settlementSchema>;
+
+export function isFactsEligibleReasonCode(reasonCode: ReasonCode): reasonCode is FactsEligibleReasonCode {
+  return (factsEligibleReasonCodes as readonly string[]).includes(reasonCode);
+}
