@@ -3,3 +3,10 @@ coverage/
 node_modules/
 intent.json
 X402_SPEND_RECEIPT_PROJECT_CONTEXT.md
+contract.md
+log.md
+.env
+.env.*
+*.pem
+*-identity*.json
+privvy*
