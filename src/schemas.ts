@@ -37,7 +37,7 @@ export const intentSchema = z
   })
   .strict();
 
-export const policySchema = z
+const policyRulesSchema = z
   .object({
     max_per_payment_base_units: nonNegativeIntegerStringSchema,
     session_budget_base_units: nonNegativeIntegerStringSchema,
@@ -49,8 +49,22 @@ export const policySchema = z
         window_seconds: z.number().int().nonnegative()
       })
       .strict()
+  });
+
+const allAllowsPolicySchema = policyRulesSchema
+  .extend({
+    budget_mode: z.literal("all_allows").optional()
   })
   .strict();
+
+const reservedPolicySchema = policyRulesSchema
+  .extend({
+    budget_mode: z.literal("reserved"),
+    reservation_window_seconds: z.number().int().positive()
+  })
+  .strict();
+
+export const policySchema = z.union([allAllowsPolicySchema, reservedPolicySchema]);
 
 export const receiptSchema = z
   .object({

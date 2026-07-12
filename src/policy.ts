@@ -3,6 +3,8 @@ import { intentSchema, policySchema, type Intent, type Policy, type ReasonCode }
 export type PolicyDecision = "ALLOW" | "DENY";
 
 export interface AllowedReceiptHistoryEntry {
+  receipt_id?: string;
+  receipt_hash?: string;
   endpoint_url: string;
   amount_base_units: string;
   timestamp: string;
@@ -20,6 +22,7 @@ export interface PolicyEvaluation {
 export interface PolicyEvaluationOptions {
   history?: ReceiptHistoryReader;
   now?: Date;
+  isSettled?: (receipt: AllowedReceiptHistoryEntry) => boolean;
 }
 
 const emptyHistory: ReceiptHistoryReader = {
@@ -52,7 +55,7 @@ export function evaluatePolicy(
 
   const history = options.history ?? emptyHistory;
   const allowedReceipts = history.listAllowedReceipts();
-  const priorAllowedSpend = sumAllowedSpend(allowedReceipts);
+  const priorAllowedSpend = sumAllowedSpend(allowedReceipts, policy, options.now ?? new Date(), options.isSettled);
   const sessionBudget = BigInt(policy.session_budget_base_units);
   if (priorAllowedSpend + amount > sessionBudget) {
     return deny("SESSION_BUDGET_EXCEEDED");
@@ -84,8 +87,29 @@ function deny(reasonCode: Exclude<ReasonCode, "ALLOWED">): PolicyEvaluation {
   };
 }
 
-function sumAllowedSpend(allowedReceipts: readonly AllowedReceiptHistoryEntry[]): bigint {
-  return allowedReceipts.reduce((total, receipt) => total + BigInt(receipt.amount_base_units), 0n);
+function sumAllowedSpend(
+  allowedReceipts: readonly AllowedReceiptHistoryEntry[],
+  policy: Policy,
+  now: Date,
+  isSettled: ((receipt: AllowedReceiptHistoryEntry) => boolean) | undefined
+): bigint {
+  if (policy.budget_mode !== "reserved") {
+    return allowedReceipts.reduce((total, receipt) => total + BigInt(receipt.amount_base_units), 0n);
+  }
+
+  const reservationWindowMs = policy.reservation_window_seconds * 1000;
+  return allowedReceipts.reduce((total, receipt) => {
+    if (isSettled?.(receipt) === true) {
+      return total + BigInt(receipt.amount_base_units);
+    }
+
+    const receiptTimestampMs = Date.parse(receipt.timestamp);
+    if (!Number.isFinite(receiptTimestampMs) || now.getTime() < receiptTimestampMs + reservationWindowMs) {
+      return total + BigInt(receipt.amount_base_units);
+    }
+
+    return total;
+  }, 0n);
 }
 
 function getEndpointHostname(endpointUrl: string): string | null {

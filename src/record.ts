@@ -6,6 +6,7 @@ import { type Ed25519KeyPair } from "./keys.js";
 import { type ReceiptLedgerWriter } from "./ledger.js";
 import { evaluatePolicy } from "./policy.js";
 import { createSignedReceipt, receiptHash } from "./receipts.js";
+import { verifySettlement } from "./settlements.js";
 import { intentSchema, isFactsEligibleReasonCode, type Decision, type ReasonCode, type Receipt } from "./schemas.js";
 
 export interface EvaluateAndRecordOptions {
@@ -30,7 +31,24 @@ export function evaluateAndRecord(
   const now = options.now ?? new Date();
   const evaluation = evaluatePolicy(intentInput, policyInput, {
     history: options.ledger,
-    now
+    now,
+    isSettled: (allowedReceipt) => {
+      if (allowedReceipt.receipt_id === undefined || allowedReceipt.receipt_hash === undefined) {
+        return false;
+      }
+
+      const settlementRow = options.ledger.getSettlementRowByReceiptId(allowedReceipt.receipt_id);
+      if (settlementRow === null || settlementRow.receiptHash !== allowedReceipt.receipt_hash) {
+        return false;
+      }
+
+      try {
+        const settlement = JSON.parse(settlementRow.settlementJson);
+        return verifySettlement(settlement, options.keyPair.publicKey) && settlement.receipt_hash === allowedReceipt.receipt_hash;
+      } catch {
+        return false;
+      }
+    }
   });
 
   try {

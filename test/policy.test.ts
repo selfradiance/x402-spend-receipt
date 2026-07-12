@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { evaluatePolicy, type AllowedReceiptHistoryEntry, type ReceiptHistoryReader } from "../src/index.js";
+import { evaluatePolicy, policySchema, type AllowedReceiptHistoryEntry, type ReceiptHistoryReader } from "../src/index.js";
 
 const now = new Date("2026-06-10T22:00:00.000Z");
 
@@ -181,5 +181,57 @@ describe("policy evaluation", () => {
       decision: "DENY",
       reasonCode: "REPEAT_PAYMENT_LOOP"
     });
+  });
+
+  it("keeps omitted budget mode compatible and validates the two supported modes", () => {
+    expect(policySchema.safeParse(validPolicy).success).toBe(true);
+    expect(policySchema.safeParse({ ...validPolicy, budget_mode: "all_allows" }).success).toBe(true);
+    expect(
+      policySchema.safeParse({ ...validPolicy, budget_mode: "reserved", reservation_window_seconds: 3600 }).success
+    ).toBe(true);
+    expect(policySchema.safeParse({ ...validPolicy, budget_mode: "reserved" }).success).toBe(false);
+    expect(
+      policySchema.safeParse({ ...validPolicy, budget_mode: "reserved", reservation_window_seconds: 0 }).success
+    ).toBe(false);
+    expect(
+      policySchema.safeParse({ ...validPolicy, budget_mode: "all_allows", reservation_window_seconds: 60 }).success
+    ).toBe(false);
+  });
+
+  it("counts reserved ALLOWs strictly before expiry and verified settlements at every age", () => {
+    const receiptTime = new Date("2026-06-10T20:00:00.000Z");
+    const reservedPolicy = {
+      ...validPolicy,
+      session_budget_base_units: "100",
+      budget_mode: "reserved" as const,
+      reservation_window_seconds: 3600
+    };
+    const priorAllowed = history([
+      allowedEntry({
+        receipt_id: "00000000-0000-4000-8000-000000000020",
+        receipt_hash: "a".repeat(64),
+        timestamp: receiptTime.toISOString()
+      })
+    ]);
+
+    expect(
+      evaluatePolicy(validIntent, reservedPolicy, {
+        history: priorAllowed,
+        now: new Date("2026-06-10T20:59:59.000Z")
+      }).reasonCode
+    ).toBe("SESSION_BUDGET_EXCEEDED");
+    expect(
+      evaluatePolicy(validIntent, reservedPolicy, {
+        history: priorAllowed,
+        now: new Date("2026-06-10T21:00:00.000Z")
+      }).reasonCode
+    ).toBe("ALLOWED");
+    expect(
+      evaluatePolicy(validIntent, reservedPolicy, {
+        history: priorAllowed,
+        now: new Date("2026-06-10T21:00:01.000Z"),
+        isSettled: () => true
+      }).reasonCode
+    ).toBe("SESSION_BUDGET_EXCEEDED");
   });
 });

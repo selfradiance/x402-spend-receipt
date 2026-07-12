@@ -54,6 +54,8 @@ interface LastHashRow {
 }
 
 interface AllowedHistoryRow {
+  receipt_id: string;
+  receipt_hash: string;
   endpoint_url: string;
   amount_base_units: string;
   timestamp: string;
@@ -220,7 +222,7 @@ export class SqliteReceiptLedger implements ReceiptLedgerWriter {
   listAllowedReceipts(): readonly AllowedReceiptHistoryEntry[] {
     const rows = this.db
       .prepare(
-        `SELECT endpoint_url, amount_base_units, timestamp
+        `SELECT receipt_id, receipt_hash, endpoint_url, amount_base_units, timestamp
          FROM receipts
          WHERE decision = 'ALLOW'
            AND endpoint_url IS NOT NULL
@@ -230,6 +232,8 @@ export class SqliteReceiptLedger implements ReceiptLedgerWriter {
       .all() as AllowedHistoryRow[];
 
     return rows.map((row) => ({
+      receipt_id: row.receipt_id,
+      receipt_hash: row.receipt_hash,
       endpoint_url: row.endpoint_url,
       amount_base_units: row.amount_base_units,
       timestamp: row.timestamp
