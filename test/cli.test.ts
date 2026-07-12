@@ -116,6 +116,9 @@ describe("CLI", () => {
     expect(statSync(join(localConfigDir, "ed25519.public.key")).isFile()).toBe(true);
     expect(statSync(join(localConfigDir, "policy.json")).isFile()).toBe(true);
     expect(statSync(join(localConfigDir, "ledger.sqlite")).isFile()).toBe(true);
+    expect(JSON.parse(readFileSync(join(localConfigDir, "policy.json"), "utf8"))).toMatchObject({
+      budget_mode: "all_allows"
+    });
   });
 
   it("check exits 0 on ALLOW and prints the decision plus receipt JSON", async () => {

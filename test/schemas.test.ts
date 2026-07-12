@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { intentSchema, policySchema, reasonCodes, receiptSchema } from "../src/index.js";
+import {
+  aggregateSummarySchema,
+  intentSchema,
+  paymentFactsSchema,
+  policySchema,
+  reasonCodes,
+  receiptSchema,
+  settlementSchema
+} from "../src/index.js";
 
 const validIntent = {
   method: "x402",
@@ -73,5 +81,67 @@ describe("schemas", () => {
 
     expect(receiptSchema.safeParse(receipt).success).toBe(true);
     expect(receiptSchema.safeParse({ ...receipt, reason_code: "NOT_A_REASON" }).success).toBe(false);
+  });
+
+  it("uses strict schemas for facts, settlements, and summaries", () => {
+    const facts = {
+      schema_version: "1.0",
+      facts_id: "00000000-0000-4000-8000-000000000070",
+      timestamp: "2026-06-10T22:00:00.000Z",
+      receipt_id: "00000000-0000-4000-8000-000000000071",
+      receipt_hash: "a".repeat(64),
+      amount_base_units: "100",
+      asset: "USDC",
+      network: "base",
+      pay_to: "0xabc123",
+      key_id: "ed25519:test",
+      signature: "signature-placeholder"
+    };
+    const settlement = {
+      schema_version: "1.0",
+      settlement_id: "00000000-0000-4000-8000-000000000072",
+      timestamp: "2026-06-10T22:00:00.000Z",
+      receipt_id: facts.receipt_id,
+      receipt_hash: facts.receipt_hash,
+      tx_hash: `0x${"a".repeat(64)}`,
+      network: "eip155:8453",
+      key_id: "ed25519:test",
+      signature: "signature-placeholder"
+    };
+    const summary = {
+      schema_version: "1.0",
+      aggregate_id: "00000000-0000-4000-8000-000000000073",
+      created_at: "2026-06-10T22:00:00.000Z",
+      range: { type: "receipt_id", from_id: facts.receipt_id, to_id: facts.receipt_id },
+      receipt_count: 1,
+      decision_counts: { ALLOW: 1, DENY: 0 },
+      reason_code_counts: {
+        ALLOWED: 1,
+        AMOUNT_EXCEEDS_PER_PAYMENT_MAX: 0,
+        SESSION_BUDGET_EXCEEDED: 0,
+        PAY_TO_NOT_ALLOWED: 0,
+        HOST_NOT_ALLOWED: 0,
+        REPEAT_PAYMENT_LOOP: 0,
+        INTENT_INVALID: 0,
+        POLICY_INVALID: 0
+      },
+      invalid_intent_count: 0,
+      invalid_policy_count: 0,
+      legacy_unproven_count: 0,
+      totals: [],
+      first_receipt_hash: facts.receipt_hash,
+      last_receipt_hash: facts.receipt_hash,
+      merkle_root: facts.receipt_hash,
+      key_id: "ed25519:test",
+      signature: "signature-placeholder"
+    };
+
+    expect(paymentFactsSchema.safeParse(facts).success).toBe(true);
+    expect(paymentFactsSchema.safeParse({ ...facts, extra: true }).success).toBe(false);
+    expect(paymentFactsSchema.safeParse({ ...facts, signature: undefined }).success).toBe(false);
+    expect(settlementSchema.safeParse(settlement).success).toBe(true);
+    expect(settlementSchema.safeParse({ ...settlement, extra: true }).success).toBe(false);
+    expect(aggregateSummarySchema.safeParse(summary).success).toBe(true);
+    expect(aggregateSummarySchema.safeParse({ ...summary, extra: true }).success).toBe(false);
   });
 });

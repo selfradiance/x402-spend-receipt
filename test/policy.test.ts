@@ -194,8 +194,16 @@ describe("policy evaluation", () => {
       policySchema.safeParse({ ...validPolicy, budget_mode: "reserved", reservation_window_seconds: 0 }).success
     ).toBe(false);
     expect(
+      policySchema.safeParse({ ...validPolicy, budget_mode: "reserved", reservation_window_seconds: -1 }).success
+    ).toBe(false);
+    expect(
+      policySchema.safeParse({ ...validPolicy, budget_mode: "reserved", reservation_window_seconds: 1.5 }).success
+    ).toBe(false);
+    expect(policySchema.safeParse({ ...validPolicy, budget_mode: "unknown" }).success).toBe(false);
+    expect(
       policySchema.safeParse({ ...validPolicy, budget_mode: "all_allows", reservation_window_seconds: 60 }).success
     ).toBe(false);
+    expect(policySchema.safeParse({ ...validPolicy, extra_rule: true }).success).toBe(false);
   });
 
   it("counts reserved ALLOWs strictly before expiry and verified settlements at every age", () => {
