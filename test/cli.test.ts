@@ -386,4 +386,29 @@ describe("CLI", () => {
     expect(JSON.parse(clobber.stdout)).toMatchObject({ ok: false, code: "FILE_EXISTS" });
     expect(readFileSync(outputPath, "utf8")).toBe("sentinel\n");
   });
+
+  it("export-audit creates a portable bundle verified with a separately supplied public key", async () => {
+    const workspace = await initializedWorkspace();
+    const intentPath = join(workspace.root, "intent.json");
+    const bundlePath = join(workspace.root, "bundle");
+    writeFileSync(intentPath, `${JSON.stringify(validIntent)}\n`);
+    const check = await run(["check", intentPath], workspace);
+    const receipt = (JSON.parse(check.stdout) as { receipt: { receipt_id: string } }).receipt;
+
+    const exported = await run(
+      ["export-audit", "--from-id", receipt.receipt_id, "--to-id", receipt.receipt_id, "--out", bundlePath],
+      workspace
+    );
+    const missingKey = await run(["verify-aggregate", "--bundle", bundlePath], workspace);
+    const verified = await run(
+      ["verify-aggregate", "--bundle", bundlePath, "--pubkey", join(configDir(workspace.configRoot), "ed25519.public.key")],
+      workspace
+    );
+
+    expect(exported.exitCode).toBe(0);
+    expect(JSON.parse(exported.stdout)).toMatchObject({ ok: true });
+    expect(JSON.parse(missingKey.stdout)).toMatchObject({ ok: false, code: "PUBKEY_REQUIRED" });
+    expect(verified.exitCode).toBe(0);
+    expect(JSON.parse(verified.stdout)).toEqual({ ok: true, valid: true });
+  });
 });

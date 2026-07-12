@@ -23,6 +23,7 @@ import { createSignedSettlement } from "./settlements.js";
 import { paymentFactsSchema, receiptSchema } from "./schemas.js";
 import { isCaip2Network, mapFactsNetwork, normalizeTransactionHash } from "./network.js";
 import { AggregationError, createAggregateFromLedger, verifyAggregateInLedger } from "./aggregation.js";
+import { AuditBundleError, verifyAuditBundle, writeAuditBundle } from "./audit.js";
 
 interface CliStreams {
   stdout: Pick<NodeJS.WriteStream, "write">;
@@ -143,11 +144,27 @@ export async function runCli(args: readonly string[], options: RunCliOptions = {
     });
 
   program
+    .command("export-audit")
+    .option("--from-id <id>", "inclusive first receipt ID")
+    .option("--to-id <id>", "inclusive last receipt ID")
+    .option("--since <iso8601>", "inclusive UTC receipt timestamp")
+    .option("--until <iso8601>", "exclusive UTC receipt timestamp")
+    .requiredOption("--out <dir>", "audit bundle output directory")
+    .option("--allow-legacy", "include legacy receipts without amounts")
+    .option("--force", "replace an existing output directory")
+    .description("Export a signed, portable audit bundle for a receipt range.")
+    .action((commandOptions: AggregateCommandOptions) => {
+      exportAudit(context, commandOptions);
+    });
+
+  program
     .command("verify-aggregate")
-    .argument("<summary_path>")
-    .description("Verify a signed aggregate summary against the local ledger.")
-    .action((summaryPath: string) => {
-      verifyLocalAggregate(context, summaryPath);
+    .argument("[summary_path]")
+    .option("--bundle <dir>", "portable audit bundle directory")
+    .option("--pubkey <path>", "trusted base64 Ed25519 public-key file for bundle mode")
+    .description("Verify an aggregate against the local ledger or a portable audit bundle.")
+    .action((summaryPath: string | undefined, commandOptions: { bundle?: string; pubkey?: string }) => {
+      verifyAggregate(context, summaryPath, commandOptions);
     });
 
   try {
@@ -380,6 +397,65 @@ function aggregateReceipts(context: CliContext, commandOptions: AggregateCommand
   }
 }
 
+function exportAudit(context: CliContext, commandOptions: AggregateCommandOptions): void {
+  const range = parseAggregateRange(commandOptions);
+  const outputPath = resolvePath(context.cwd, commandOptions.out);
+  if (existsSync(outputPath) && commandOptions.force !== true) {
+    throw new NewCliCommandError("FILE_EXISTS", "Output directory already exists");
+  }
+
+  const paths = configPaths(context.env);
+  const keyPair = readKeyPair(paths);
+  const ledger = new SqliteReceiptLedger(paths.ledgerPath);
+  try {
+    const aggregate = createAggregateFromLedger(ledger, {
+      range,
+      allowLegacy: commandOptions.allowLegacy === true,
+      keyPair
+    });
+    const manifest = writeAuditBundle({
+      outputDir: outputPath,
+      force: commandOptions.force === true,
+      artifacts: aggregate,
+      publicKey: keyPair.publicKey,
+      keyPair
+    });
+    writeJson(context.streams.stdout, { ok: true, summary: aggregate.summary, manifest, out: outputPath });
+  } catch (error) {
+    throw asNewCliCommandError(error);
+  } finally {
+    ledger.close();
+  }
+}
+
+function verifyAggregate(
+  context: CliContext,
+  summaryPath: string | undefined,
+  commandOptions: { bundle?: string; pubkey?: string }
+): void {
+  if (commandOptions.bundle !== undefined) {
+    if (summaryPath !== undefined) {
+      throw new NewCliCommandError("INVALID_RANGE", "Bundle verification does not accept a summary path");
+    }
+    if (commandOptions.pubkey === undefined) {
+      throw new NewCliCommandError("PUBKEY_REQUIRED", "Bundle verification requires --pubkey");
+    }
+
+    const publicKey = readTextFile(resolvePath(context.cwd, commandOptions.pubkey)).trim();
+    const verification = verifyAuditBundle(resolvePath(context.cwd, commandOptions.bundle), publicKey);
+    if (!verification.valid) {
+      throw new NewCliCommandError(verification.code ?? "TOTALS_MISMATCH", verification.error ?? "Audit bundle verification failed");
+    }
+    writeJson(context.streams.stdout, { ok: true, valid: true });
+    return;
+  }
+
+  if (summaryPath === undefined) {
+    throw new NewCliCommandError("SUMMARY_SIGNATURE_INVALID", "Local verification requires a summary path");
+  }
+  verifyLocalAggregate(context, summaryPath);
+}
+
 function verifyLocalAggregate(context: CliContext, summaryPath: string): void {
   const paths = configPaths(context.env);
   const publicKey = readTextFile(paths.publicKeyPath).trim();
@@ -503,6 +579,9 @@ function asNewCliCommandError(error: unknown): NewCliCommandError {
     return error;
   }
   if (error instanceof AggregationError) {
+    return new NewCliCommandError(error.code, error.message);
+  }
+  if (error instanceof AuditBundleError) {
     return new NewCliCommandError(error.code, error.message);
   }
   return new NewCliCommandError("TOTALS_MISMATCH", error instanceof Error ? error.message : String(error));
