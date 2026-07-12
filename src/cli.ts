@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 import { randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { Command, CommanderError } from "commander";
@@ -22,6 +22,7 @@ import {
 import { createSignedSettlement } from "./settlements.js";
 import { paymentFactsSchema, receiptSchema } from "./schemas.js";
 import { isCaip2Network, mapFactsNetwork, normalizeTransactionHash } from "./network.js";
+import { AggregationError, createAggregateFromLedger, verifyAggregateInLedger } from "./aggregation.js";
 
 interface CliStreams {
   stdout: Pick<NodeJS.WriteStream, "write">;
@@ -47,6 +48,16 @@ interface ConfigPaths {
   publicKeyPath: string;
   policyPath: string;
   ledgerPath: string;
+}
+
+interface AggregateCommandOptions {
+  fromId?: string;
+  toId?: string;
+  since?: string;
+  until?: string;
+  out: string;
+  allowLegacy?: boolean;
+  force?: boolean;
 }
 
 const defaultPolicyTemplate = {
@@ -115,6 +126,28 @@ export async function runCli(args: readonly string[], options: RunCliOptions = {
     .description("Record a signed local settlement attestation for an ALLOW receipt.")
     .action((receiptId: string, commandOptions: { tx: string; network: string }) => {
       recordSettlement(context, receiptId, commandOptions);
+    });
+
+  program
+    .command("aggregate")
+    .option("--from-id <id>", "inclusive first receipt ID")
+    .option("--to-id <id>", "inclusive last receipt ID")
+    .option("--since <iso8601>", "inclusive UTC receipt timestamp")
+    .option("--until <iso8601>", "exclusive UTC receipt timestamp")
+    .requiredOption("--out <path>", "summary JSON output path")
+    .option("--allow-legacy", "include legacy receipts without amounts")
+    .option("--force", "replace an existing output file")
+    .description("Create a signed spend summary for a receipt range.")
+    .action((commandOptions: AggregateCommandOptions) => {
+      aggregateReceipts(context, commandOptions);
+    });
+
+  program
+    .command("verify-aggregate")
+    .argument("<summary_path>")
+    .description("Verify a signed aggregate summary against the local ledger.")
+    .action((summaryPath: string) => {
+      verifyLocalAggregate(context, summaryPath);
     });
 
   try {
@@ -322,6 +355,48 @@ function recordSettlement(context: CliContext, receiptId: string, commandOptions
   }
 }
 
+function aggregateReceipts(context: CliContext, commandOptions: AggregateCommandOptions): void {
+  const range = parseAggregateRange(commandOptions);
+  const outputPath = resolvePath(context.cwd, commandOptions.out);
+  if (existsSync(outputPath) && commandOptions.force !== true) {
+    throw new NewCliCommandError("FILE_EXISTS", "Output file already exists");
+  }
+
+  const paths = configPaths(context.env);
+  const keyPair = readKeyPair(paths);
+  const ledger = new SqliteReceiptLedger(paths.ledgerPath);
+  try {
+    const aggregate = createAggregateFromLedger(ledger, {
+      range,
+      allowLegacy: commandOptions.allowLegacy === true,
+      keyPair
+    });
+    writeJsonFileAtomically(outputPath, aggregate.summary);
+    writeJson(context.streams.stdout, { ok: true, summary: aggregate.summary, out: outputPath });
+  } catch (error) {
+    throw asNewCliCommandError(error);
+  } finally {
+    ledger.close();
+  }
+}
+
+function verifyLocalAggregate(context: CliContext, summaryPath: string): void {
+  const paths = configPaths(context.env);
+  const publicKey = readTextFile(paths.publicKeyPath).trim();
+  const summary = readNewCommandJson(resolvePath(context.cwd, summaryPath), "SUMMARY_SIGNATURE_INVALID");
+  const ledger = new SqliteReceiptLedger(paths.ledgerPath);
+
+  try {
+    const verification = verifyAggregateInLedger(ledger, summary, publicKey);
+    if (!verification.valid) {
+      throw new NewCliCommandError(verification.code ?? "TOTALS_MISMATCH", verification.error ?? "Aggregate verification failed");
+    }
+    writeJson(context.streams.stdout, { ok: true, valid: true });
+  } finally {
+    ledger.close();
+  }
+}
+
 function configPaths(env: NodeJS.ProcessEnv): ConfigPaths {
   const configRoot = env.XDG_CONFIG_HOME ?? join(env.HOME ?? homedir(), ".config");
   const configDir = join(configRoot, "x402-spend-receipt");
@@ -350,6 +425,14 @@ function readJsonFile(path: string): unknown {
   return JSON.parse(readTextFile(path));
 }
 
+function readNewCommandJson(path: string, code: string): unknown {
+  try {
+    return readJsonFile(path);
+  } catch {
+    throw new NewCliCommandError(code, "JSON input is not valid");
+  }
+}
+
 function readTextFile(path: string): string {
   return readFileSync(path, "utf8");
 }
@@ -374,6 +457,55 @@ function extractReceipt(value: unknown): unknown {
 
 function writeJson(stream: Pick<NodeJS.WriteStream, "write">, value: unknown): void {
   stream.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function writeJsonFileAtomically(path: string, value: unknown): void {
+  const temporaryPath = join(dirname(path), `.${randomUUID()}.tmp`);
+  try {
+    writeFileSync(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+    renameSync(temporaryPath, path);
+  } catch (error) {
+    rmSync(temporaryPath, { force: true });
+    throw error;
+  }
+}
+
+function parseAggregateRange(commandOptions: AggregateCommandOptions) {
+  const hasReceiptRange = commandOptions.fromId !== undefined || commandOptions.toId !== undefined;
+  const hasTimeRange = commandOptions.since !== undefined || commandOptions.until !== undefined;
+  if (hasReceiptRange === hasTimeRange) {
+    throw new NewCliCommandError("INVALID_RANGE", "Specify exactly one complete receipt or time range");
+  }
+
+  if (hasReceiptRange) {
+    if (commandOptions.fromId === undefined || commandOptions.toId === undefined) {
+      throw new NewCliCommandError("INVALID_RANGE", "Receipt ranges require both --from-id and --to-id");
+    }
+    return {
+      type: "receipt_id" as const,
+      from_id: commandOptions.fromId,
+      to_id: commandOptions.toId
+    };
+  }
+
+  if (commandOptions.since === undefined || commandOptions.until === undefined) {
+    throw new NewCliCommandError("INVALID_RANGE", "Time ranges require both --since and --until");
+  }
+  return {
+    type: "time" as const,
+    since: commandOptions.since,
+    until: commandOptions.until
+  };
+}
+
+function asNewCliCommandError(error: unknown): NewCliCommandError {
+  if (error instanceof NewCliCommandError) {
+    return error;
+  }
+  if (error instanceof AggregationError) {
+    return new NewCliCommandError(error.code, error.message);
+  }
+  return new NewCliCommandError("TOTALS_MISMATCH", error instanceof Error ? error.message : String(error));
 }
 
 function parseStoredReceipt(receiptJson: string, storedHash: string, publicKey: string) {

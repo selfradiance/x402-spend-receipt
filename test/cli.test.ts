@@ -326,4 +326,64 @@ describe("CLI", () => {
     expect(JSON.parse(result.stdout)).toMatchObject({ ok: false, code: "RECEIPT_SIGNATURE_INVALID" });
     expect(checkRows.count).toBe(0);
   });
+
+  it("aggregate writes a signed range summary and verify-aggregate checks it against the ledger", async () => {
+    const workspace = await initializedWorkspace();
+    const intentPath = join(workspace.root, "intent.json");
+    const summaryPath = join(workspace.root, "summary.json");
+    writeFileSync(intentPath, `${JSON.stringify(validIntent)}\n`);
+
+    const check = await run(["check", intentPath], workspace);
+    const receipt = (JSON.parse(check.stdout) as { receipt: { receipt_id: string } }).receipt;
+    const aggregate = await run(
+      ["aggregate", "--from-id", receipt.receipt_id, "--to-id", receipt.receipt_id, "--out", summaryPath],
+      workspace
+    );
+    const verification = await run(["verify-aggregate", summaryPath], workspace);
+    const summary = JSON.parse(readFileSync(summaryPath, "utf8")) as { receipt_count: number; merkle_root: string };
+
+    expect(aggregate.exitCode).toBe(0);
+    expect(JSON.parse(aggregate.stdout)).toMatchObject({ ok: true });
+    expect(summary.receipt_count).toBe(1);
+    expect(summary.merkle_root).toMatch(/^[a-f0-9]{64}$/u);
+    expect(verification.exitCode).toBe(0);
+    expect(JSON.parse(verification.stdout)).toEqual({ ok: true, valid: true });
+  });
+
+  it("aggregate rejects invalid, empty, and clobbering ranges with the error envelope", async () => {
+    const workspace = await initializedWorkspace();
+    const outputPath = join(workspace.root, "existing.json");
+    writeFileSync(outputPath, "sentinel\n");
+
+    const invalid = await run(["aggregate", "--from-id", "x", "--out", outputPath], workspace);
+    const empty = await run(
+      [
+        "aggregate",
+        "--since",
+        "2026-06-10T00:00:00.000Z",
+        "--until",
+        "2026-06-10T01:00:00.000Z",
+        "--out",
+        join(workspace.root, "empty.json")
+      ],
+      workspace
+    );
+    const clobber = await run(
+      [
+        "aggregate",
+        "--since",
+        "2026-06-10T00:00:00.000Z",
+        "--until",
+        "2026-06-11T00:00:00.000Z",
+        "--out",
+        outputPath
+      ],
+      workspace
+    );
+
+    expect(JSON.parse(invalid.stdout)).toMatchObject({ ok: false, code: "INVALID_RANGE" });
+    expect(JSON.parse(empty.stdout)).toMatchObject({ ok: false, code: "EMPTY_RANGE" });
+    expect(JSON.parse(clobber.stdout)).toMatchObject({ ok: false, code: "FILE_EXISTS" });
+    expect(readFileSync(outputPath, "utf8")).toBe("sentinel\n");
+  });
 });
